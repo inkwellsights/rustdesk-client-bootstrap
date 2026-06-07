@@ -2,7 +2,17 @@
 
 One PowerShell script that prepares a Windows laptop for unattended remote access through a self-hosted, **Tailscale-only** RustDesk relay. No router ports, no public internet exposure, no per-client server config.
 
-The relay, the ACL cage, and the controlling-side config are already done. **This repo is only for adding new clients.**
+The relay, the ACL cage, and the controlling-side config are already done.
+
+---
+
+## You just cloned this — now what?
+
+Pick your situation:
+
+- **Adding a new client laptop** → go to [TL;DR — install on a new client laptop](#tldr--install-on-a-new-client-laptop). Generate a `tag:client` auth key, run `bootstrap-client.ps1`, finish 4 GUI clicks.
+- **The relay (saiftrw) died and you're rebuilding it** → go to [Relay recovery](#relay-recovery-operator-when-saiftrw-dies). You need the compose file (in this repo) **plus** the relay's `data/` keypair, which is **NOT in this repo** — it's in your private `_secrets` backup. Restore both, `docker compose up -d`, and every existing client keeps working.
+- **Just need the relay's connection details** → ID/Relay server = `100.78.88.63`, Key = `yIABL36cWQnguBPXRQZcUwyYsyRSZD++vhjQyh7Ctu8=` (public key, safe to share). Full table in [Constants](#constants-already-in-the-script--no-editing).
 
 > **Honesty up front:** the script automates everything that is safe to automate on RustDesk 1.4.x (Tailscale join, install, and **pre-filling** the relay/key so nobody types them). The last 3 steps stay in the GUI on purpose — on 1.4.x they are the *only* method verified to configure the unattended service. See [Why some steps stay manual](#why-some-steps-stay-manual). Don't "optimise" them into silent CLI calls without re-verifying on your RustDesk version.
 
@@ -155,11 +165,11 @@ mkdir -p ~/rustdesk-server && cd ~/rustdesk-server
 docker compose up -d
 ```
 
-**`data/` is NOT in this repo** (it holds the private key — gitignored). You must back it up separately: it's a manual copy to safe storage, not a `git push`.
+**`data/` is NOT in this repo** (it holds the private key `id_ed25519` — gitignored, and deliberately never committed even to a private repo). It lives in the operator's private `_secrets` backup. Restoring it is a manual copy to safe storage, not a `git push`.
 
 Pubkey stays the same → every existing client keeps working, zero re-bootstrapping.
 
-If `data/` is lost, `hbbs` generates a **new** keypair and every client's saved key is now wrong — they all need re-bootstrapping with the new pubkey, and you'd ship an updated script. **So: snapshot `~/rustdesk-server/data/` regularly.**
+**What happens if you lose the `data/` backup entirely?** Not a disaster, but a chore that scales with client count. `hbbs` will generate a **new** keypair on first start, so the relay runs fine — but its public key changes, and every already-onboarded client still has the *old* key. Each client then needs its key updated (re-run `bootstrap-client.ps1`, or edit `≡ → Network` on that machine) before it can connect again. With 1 client that's a 1-minute fix; with 20 remote/unattended clients it's the exact pain this whole setup exists to avoid. That is the *only* reason to keep the `data/` backup: **key continuity across a relay rebuild.** Everything else here is reproducible from this repo.
 
 ---
 
