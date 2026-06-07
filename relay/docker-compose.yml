@@ -1,0 +1,33 @@
+
+
+# Self-hosted RustDesk relay (saiftrw / CasaOS), Tailscale-only.
+# Lives on the server at ~/rustdesk-server/docker-compose.yml. This is the
+# canonical copy for recovery. The `-r` IP is the relay's own Tailscale IPv4.
+#
+# Recovery:
+#   mkdir -p ~/rustdesk-server && cd ~/rustdesk-server
+#   # copy this file here, then restore ./data/ from backup (holds the keypair)
+#   docker compose up -d
+#
+# NEVER commit ./data/ — it contains the private key id_ed25519. See ../README.md.
+
+services:
+  hbbs:
+    container_name: rustdesk-hbbs
+    image: rustdesk/rustdesk-server:latest
+    command: hbbs -r 100.78.88.63:21117
+    volumes:
+      - ./data:/root
+    network_mode: host
+    depends_on:
+      - hbbr
+    restart: unless-stopped
+
+  hbbr:
+    container_name: rustdesk-hbbr
+    image: rustdesk/rustdesk-server:latest
+    command: hbbr
+    volumes:
+      - ./data:/root
+    network_mode: host
+    restart: unless-stopped

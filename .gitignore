@@ -1,0 +1,7 @@
+# NEVER commit the relay data dir — it holds the private key (id_ed25519).
+# If data/ is committed, anyone with the repo can impersonate the relay.
+relay/data/
+data/
+
+# RustDesk config backups the bootstrap script makes
+*.toml.bak
