@@ -1,23 +1,107 @@
 # rustdesk-client-bootstrap
 
-One-script onboarding for putting a new client Windows laptop onto a self-hosted, Tailscale-only RustDesk relay.
+One PowerShell script that turns a fresh Windows laptop into an unattended-access endpoint on a self-hosted, Tailscale-only RustDesk relay. No router ports, no public internet exposure, no per-client server config.
 
-The relay, ACL cage, and controlling-side config are already done. **This repo is only about adding new clients.**
+The relay, the ACL cage, and the controlling-side config are already done. **This repo is only for adding new clients.**
 
-## What this does
+---
 
-`bootstrap-client.ps1` runs on a fresh client Windows 10/11 box as Administrator and:
+## TL;DR — install on a new client laptop
 
-1. Installs Tailscale (if missing).
-2. Joins the tailnet as a **tagged device** (`tag:client`) using a one-shot auth key — never as a user-owned device. Disables DNS hijack and subnet route acceptance so the laptop's normal internet keeps working.
-3. Verifies it can reach the relay over Tailscale.
-4. Installs RustDesk (if missing; winget first, GitHub release as fallback).
-5. Writes the RustDesk network config to point at the self-hosted relay + pubkey.
-6. Launches RustDesk and prints the three GUI clicks that finish the install.
+In admin PowerShell on the laptop, paste these three lines (after putting your auth key into line 3):
 
-It's idempotent. Safe to re-run if the first attempt half-completes.
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
+iwr https://raw.githubusercontent.com/inkwellsights/rustdesk-client-bootstrap/main/bootstrap-client.ps1 -OutFile bootstrap-client.ps1
+.\bootstrap-client.ps1 -AuthKey tskey-auth-PASTE-YOURS-HERE
+```
 
-## Constants (already burned into the script)
+Then in the RustDesk window that opens automatically:
+
+1. Wait for the **green status dot** at the bottom.
+2. **≡ menu → Security → Use permanent password ON** → set one.
+3. **≡ menu → General → Start RustDesk on boot ON**.
+4. Note the **9-digit ID** on the main window.
+
+Send the **9-digit ID + the permanent password** to whoever's controlling. Done.
+
+---
+
+## Who runs what
+
+There are two people in this loop, even if they're the same person:
+
+| Role | Where they sit | What they do |
+|---|---|---|
+| **Operator** | Your own PC | Generates an auth key, sends instructions, tests the connection, revokes the key. |
+| **Client** | The laptop being onboarded | Pastes three commands into PowerShell, finishes 4 GUI clicks, sends back the ID + password. |
+
+If both are you, just follow the operator section then the client section yourself.
+
+---
+
+## Operator playbook (do this once per new laptop)
+
+### 1. Generate a one-shot auth key
+
+Tailscale admin console → **Settings → Keys → Generate auth key**:
+
+- **Description:** `rustdesk-bootstrap <client name>`
+- **Reusable:** OFF
+- **Ephemeral:** OFF
+- **Tags:** tick **`tag:client`**
+- **Expiration:** 7 days (you'll use it once and revoke after)
+
+Copy the `tskey-auth-...` string — it's only shown once.
+
+### 2. Send this message to the client
+
+Copy-paste, drop the auth key into the marked spot, send to the client over whatever channel you use:
+
+> Hey — here's the install for unattended remote access. You'll need to run this on the laptop as **Administrator**.
+>
+> 1. Right-click the Windows Start button → **Terminal (Administrator)** → click Yes on the UAC prompt.
+> 2. Paste these three lines and press Enter after each:
+>
+> ```powershell
+> Set-ExecutionPolicy -Scope Process Bypass -Force
+> iwr https://raw.githubusercontent.com/inkwellsights/rustdesk-client-bootstrap/main/bootstrap-client.ps1 -OutFile bootstrap-client.ps1
+> .\bootstrap-client.ps1 -AuthKey tskey-auth-XXXXXXXXXXXX
+> ```
+>
+> 3. A RustDesk window will open. Wait for the small status dot at the bottom to turn **green**.
+> 4. Click the **≡ menu (top-right) → Security → Use permanent password ON** → set a password you'll remember and write it down.
+> 5. Click the **≡ menu → General → Start RustDesk on boot ON**.
+> 6. On the main window, you'll see a **9-digit ID number**. Send me that number + the password you just set.
+
+### 3. Test from your own machine
+
+Open RustDesk on your end → paste the 9-digit ID → Connect → enter the permanent password. You should land on their desktop within seconds.
+
+If the connection stalls, see [Troubleshooting](#troubleshooting).
+
+### 4. Revoke the auth key
+
+Tailscale admin console → **Settings → Keys** → find the key you used → **Revoke**.
+
+The client's tailnet membership stays intact. Revoking just prevents that key from being reused if it leaks.
+
+---
+
+## What the script actually does
+
+Walks the laptop through six steps, in order. Each is idempotent — safe to re-run if any step fails partway through.
+
+1. **Install Tailscale** if missing (winget).
+2. **Join the tailnet** as `tag:client` using the one-shot auth key, with DNS and subnet route acceptance **disabled** so the laptop's normal internet keeps working.
+3. **Verify reachability** to the relay over Tailscale (`tailscale ping`).
+4. **Install RustDesk** if missing (winget; falls back to GitHub release direct download if winget's source cache is broken).
+5. **Write the RustDesk config** so its Network settings point at the self-hosted relay + pubkey.
+6. **Launch RustDesk** and print the four remaining manual GUI steps.
+
+---
+
+## Constants (already burned into the script — no editing needed)
 
 | Field | Value |
 |---|---|
@@ -25,104 +109,78 @@ It's idempotent. Safe to re-run if the first attempt half-completes.
 | Relay pubkey | `yIABL36cWQnguBPXRQZcUwyYsyRSZD++vhjQyh7Ctu8=` |
 | Tailscale tag | `tag:client` |
 
-These are safe to commit publicly:
-- The relay IP is a Tailscale 100.x address — unreachable outside the tailnet.
-- The relay key is a *public* key. Knowing it lets clients verify the relay's identity; it grants no access on its own.
-- Tag is just an ACL label.
+All three are safe to commit publicly:
 
-The only per-install secret is the Tailscale auth key, which is passed as a script parameter (never committed) and rotated per install.
+- The relay IP is a Tailscale `100.x` address — only reachable from inside the tailnet.
+- The relay key is a *public* key (asymmetric crypto). It lets clients verify the relay's identity; it grants no access on its own.
+- The tag is just an ACL label.
 
-## Per-client procedure
+The only per-install secret is the Tailscale auth key, passed as a script parameter. It's never committed, and it's rotated per install.
 
-### 1. Generate a fresh auth key
-
-Tailscale admin console → **Settings → Keys → Generate auth key**:
-- Description: `rustdesk-bootstrap <client name>`
-- Reusable: **OFF**
-- Ephemeral: **OFF**
-- Tags: tick **`tag:client`**
-- Expiration: 7 days is plenty (you'll use it once and revoke after)
-
-Copy the `tskey-auth-...` string — it's only shown once.
-
-### 2. Get the script onto the client machine
-
-Option A (preferred — clean repo clone):
-```powershell
-git clone https://github.com/inkwellsights/rustdesk-client-bootstrap.git
-cd rustdesk-client-bootstrap
-```
-
-Option B (one-liner, no git needed):
-```powershell
-iwr https://raw.githubusercontent.com/inkwellsights/rustdesk-client-bootstrap/main/bootstrap-client.ps1 -OutFile bootstrap-client.ps1
-```
-
-### 3. Run it as Administrator
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass -Force
-.\bootstrap-client.ps1 -AuthKey tskey-auth-XXXXXXXXXXXX
-```
-
-The script handles steps 1–6 above. When it finishes, RustDesk's window is open and waiting.
-
-### 4. Finish in the RustDesk GUI (~30 seconds)
-
-The script prints these at the end:
-
-1. Wait for the **green status dot** at the bottom of the RustDesk window.
-2. **≡ menu → Security → Use permanent password ON →** set one, write it down.
-3. **≡ menu → General → Start RustDesk on boot ON** (also tick **Enable service** if shown).
-4. Note the **9-digit ID** on the main window.
-
-Hand the **9-digit ID + permanent password** back to your controlling end.
-
-### 5. Verify from your end
-
-Open your own RustDesk → punch in the 9-digit ID → connect → enter the password. You should land on their desktop in a few seconds. If it stalls, see **Troubleshooting** below.
-
-### 6. Revoke the auth key
-
-Tailscale admin console → **Settings → Keys** → find the key you just used → **Revoke**. The client's tailnet membership stays intact (already authorized); revoking just prevents the key from being reused if it leaked.
+---
 
 ## Troubleshooting
 
+### Script error: "Run this script in PowerShell as Administrator"
+The PowerShell window isn't elevated. Close it. Right-click the Windows Start button → **Terminal (Administrator)** → click Yes on the UAC prompt → try again.
+
+### Script error: "tailscale up failed"
+The auth key is wrong, expired, or wasn't tagged. Generate a new one in the admin console, ticking `tag:client` this time, and re-run with the new key.
+
+### Script error: "Relay unreachable"
+The laptop joined the tailnet but the ACL grant `tag:client → tag:rustdesk` isn't matching. Check the admin console → **Machines** — the laptop's row should show `tag:client` in the Tags column. If it shows your email instead, the auth key wasn't tagged. Revoke, regenerate with the tag, `tailscale logout` on the laptop, re-run the script.
+
 ### "Failed when opening source(s)" during winget install
-winget's source cache is stale. The script auto-falls-back to the GitHub release download for RustDesk. For Tailscale, run `winget source reset --force; winget source update` and re-run the script.
+winget's source cache is stale. Run:
+```powershell
+winget source reset --force
+winget source update
+```
+Then re-run the bootstrap script. (RustDesk install will fall back automatically; this matters mainly for Tailscale.)
 
 ### Laptop's internet dies the moment Tailscale comes on
-DNS hijack from a previous Tailscale session on this box. The script already uses `--accept-dns=false --accept-routes=false --reset` to prevent this on fresh joins, but if the laptop was on a different tailnet earlier, run `tailscale logout` first then re-run the script.
+DNS hijack from a previous Tailscale session that joined a different tailnet. The script uses `--accept-dns=false --accept-routes=false --reset` to prevent this on fresh joins, but if the laptop was already on a different tailnet, do `tailscale logout` first then re-run.
 
-### Green dot stays red after Network settings applied
-- `tailscale ping 100.78.88.63` from the laptop must succeed. If it doesn't, the ACL grant `tag:client → tag:rustdesk` isn't matching. Check the admin console → **Machines** → laptop's row shows `tag:client` in the Tags column, and the relay (`saiftrw`) shows `tag:rustdesk`.
-- Verify the relay's containers are actually running: `ssh msa@100.78.88.63 'docker compose -f ~/rustdesk-server/docker-compose.yml ps'`.
+### Green dot stays red after the script finishes
+- Run `& "C:\Program Files\Tailscale\tailscale.exe" ping 100.78.88.63` on the laptop. Must succeed within a few packets.
+- If ping fails: see "Relay unreachable" above.
+- If ping succeeds but the dot is still red: relay's containers may be down. Operator should SSH to the relay and check `docker compose ps`.
 
 ### Tailscale Machines list shows the laptop owned by an email, not `tag:client`
-The auth key wasn't tagged. Revoke it, generate a new one with the `tag:client` tag ticked, `tailscale logout` on the laptop, re-run the script with the new key.
+Auth key wasn't tagged. Revoke, regenerate with `tag:client` ticked, `tailscale logout` on the laptop, re-run.
 
-## Relay recovery
+### Connect stalls on "Connecting…"
+- Most likely: the controlling end is using a different key or relay IP than the client. Check `≡ → Network` on both ends; the three values must match exactly.
+- Less likely: the laptop isn't actually on the tailnet anymore. Run `tailscale status` on the laptop.
 
-If `saiftrw` dies, you're rebuilding from scratch only if `~/rustdesk-server/data/` was lost. As long as that directory's contents (especially `id_ed25519` and `id_ed25519.pub`) are backed up, restoring the relay is:
+---
+
+## Relay recovery (for the operator, when saiftrw dies)
+
+The relay itself isn't in this repo — only the client-side bootstrap is. But here's the survival note:
+
+The pubkey `yIABL36c...` is generated by `hbbs` on first startup and written to `~/rustdesk-server/data/id_ed25519.pub`. **As long as `~/rustdesk-server/data/` is backed up**, restoring the relay is:
 
 ```bash
-mkdir -p ~/rustdesk-server/data
-# restore data/ contents from backup
+# on the replacement box
+mkdir -p ~/rustdesk-server
+# restore docker-compose.yml + data/ from backup
 cd ~/rustdesk-server
-# (copy the docker-compose.yml from this repo's runbook/ or rewrite it)
 docker compose up -d
 ```
 
-The pubkey doesn't change, so every existing client keeps working with zero re-bootstrapping. **Back up `~/rustdesk-server/data/` regularly on saiftrw.**
+Pubkey stays the same. **Every existing client keeps working with zero re-bootstrapping.**
 
-If `data/` is lost, hbbs generates a new keypair on first start and **every existing client breaks** — they'd all need re-bootstrapping with the new key. Avoid this by snapshotting `data/`.
+If `data/` is lost, `hbbs` generates a new keypair on first start. Every client's saved key is now wrong. They all need re-bootstrapping with the new pubkey — and you have to ship them an updated script. **So: snapshot `~/rustdesk-server/data/` regularly.**
+
+---
 
 ## Repo layout
 
 ```
 rustdesk-client-bootstrap/
 ├── README.md               # this file
-└── bootstrap-client.ps1    # Windows install script
+└── bootstrap-client.ps1    # Windows install script (parameterized)
 ```
 
 No Linux variant yet — add one if/when a Linux client needs onboarding.
